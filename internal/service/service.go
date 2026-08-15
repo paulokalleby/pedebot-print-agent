@@ -108,15 +108,20 @@ func (s *Service) Pair(serverURL, code string) error {
 	s.setStatus(func(st *Status) { st.Paired = true; st.LastError = "" })
 
 	go s.connect()
+	go s.processQueueLoop()
 
 	return nil
 }
 
 // Start conecta se já estiver pareado - chamado uma vez na
-// inicialização do Agent.
+// inicialização do Agent. O processamento da fila roda independente da
+// conexão WebSocket estar de pé - offline vira só mais um motivo de
+// falha que entra no mesmo backoff (ver processQueueLoop), sem
+// tratamento especial.
 func (s *Service) Start() {
 	if s.cfg.Paired() {
 		go s.connect()
+		go s.processQueueLoop()
 	}
 }
 
@@ -171,7 +176,7 @@ func (s *Service) connect() {
 			return
 		}
 
-		s.handlePrintJob(payload.PrintJobID)
+		_ = s.queue.Add(payload.PrintJobID)
 	}
 
 	if err := s.ws.Connect(); err != nil {
@@ -185,7 +190,8 @@ func (s *Service) connect() {
 
 // reconcilePending é a garantia de entrega de verdade (WebSocket é só
 // notificação em tempo real, nunca a fonte da verdade - ver SPEC-025,
-// "Não confiar exclusivamente no WebSocket").
+// "Não confiar exclusivamente no WebSocket"). Só enfileira - quem
+// processa de fato é processQueueLoop.
 func (s *Service) reconcilePending() {
 	jobs, err := s.client.PendingPrintJobs()
 	if err != nil {
@@ -195,16 +201,38 @@ func (s *Service) reconcilePending() {
 	}
 
 	for _, job := range jobs {
-		s.handlePrintJob(job.ID)
+		_ = s.queue.Add(job.ID)
 	}
 }
 
-func (s *Service) handlePrintJob(id string) {
-	_ = s.queue.Add(id)
+// processQueueLoop tenta os jobs prontos (queue.Due()) a cada poucos
+// segundos - continua rodando mesmo com o WebSocket desconectado
+// (offline vira só uma falha de tentativa como outra qualquer, sujeita
+// ao mesmo backoff, sem tratamento especial). Loop de vida do processo,
+// não retorna sozinho.
+func (s *Service) processQueueLoop() {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		for _, id := range s.queue.Due() {
+			s.attemptPrintJob(id)
+		}
+	}
+}
+
+func (s *Service) attemptPrintJob(id string) {
+	fail := func(reason string) {
+		if gaveUp := s.queue.RecordFailure(id); gaveUp {
+			log.Printf("job %s desistido após esgotar tentativas (%s)", id, reason)
+		} else {
+			log.Printf("job %s falhou, tentando de novo com backoff (%s)", id, reason)
+		}
+	}
 
 	job, err := s.client.GetPrintJob(id)
 	if err != nil {
-		log.Printf("falha ao buscar job %s: %v", id, err)
+		fail("busca do job: " + err.Error())
 
 		return
 	}
@@ -229,13 +257,13 @@ func (s *Service) handlePrintJob(id string) {
 
 	if err := s.printer.Print(receipt); err != nil {
 		_ = s.client.UpdatePrintJobStatus(id, "failed", err.Error())
-		log.Printf("falha ao imprimir job %s: %v", id, err)
+		fail("impressão: " + err.Error())
 
 		return
 	}
 
 	if err := s.client.UpdatePrintJobStatus(id, "printed", ""); err != nil {
-		log.Printf("falha ao marcar job %s como printed: %v", id, err)
+		fail("confirmação de status: " + err.Error())
 
 		return
 	}
