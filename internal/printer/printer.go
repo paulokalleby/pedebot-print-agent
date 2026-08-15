@@ -1,9 +1,11 @@
-// Package printer define a abstração de impressora (ver SPEC-025,
-// "Estratégia ESC/POS") - só a interface e um stub de log por enquanto.
-// A implementação real ESC/POS (USB/TCP, code page, corte de papel) é
-// Fase 5, ainda não começou - registrar aqui só o suficiente pra provar
-// o resto do pipeline (pareamento -> WebSocket -> busca do job -> status)
-// sem fingir que a impressão física já funciona.
+// Package printer implementa a abstração de impressora (ver SPEC-025,
+// "Estratégia ESC/POS"): TCPPrinter (impressora de rede, porta 9100,
+// testável sem hardware via um listener TCP simples) e USBPrinter
+// (device file, só Linux por enquanto - ver usb.go). Nenhuma das duas
+// foi validada contra uma impressora térmica física real ainda - os
+// comandos ESC/POS e a code page CP860 seguem a especificação/tabela
+// oficial, mas variação de modelo real (largura de coluna exata,
+// comando de corte suportado) só se confirma com hardware em mãos.
 package printer
 
 import "log"

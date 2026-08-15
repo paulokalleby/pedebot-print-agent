@@ -45,7 +45,6 @@ type Service struct {
 	client *api.Client
 	ws     *websocket.Client
 	queue  *queue.Queue
-	printer printer.Printer
 	status Status
 
 	OnStatusChange func(Status)
@@ -58,11 +57,10 @@ func New(cfg *config.Config, reverb ReverbConfig, dir string) (*Service, error) 
 	}
 
 	s := &Service{
-		cfg:     cfg,
-		reverb:  reverb,
-		queue:   q,
-		printer: printer.LogPrinter{},
-		status:  Status{Paired: cfg.Paired()},
+		cfg:    cfg,
+		reverb: reverb,
+		queue:  q,
+		status: Status{Paired: cfg.Paired()},
 	}
 
 	if cfg.Paired() {
@@ -70,6 +68,14 @@ func New(cfg *config.Config, reverb ReverbConfig, dir string) (*Service, error) 
 	}
 
 	return s, nil
+}
+
+// printerFor monta a impressora de verdade a partir dos dados que a API
+// devolveu pra este job específico - cada job pode, em tese, ir pra uma
+// impressora diferente da mesma estação (ver `printer_id` em
+// `print_jobs`), então a resolução é por job, não fixa no Service.
+func (s *Service) printerFor(data map[string]any) (printer.Printer, error) {
+	return printer.FromJobPrinter(data)
 }
 
 func (s *Service) Status() Status {
@@ -255,11 +261,26 @@ func (s *Service) attemptPrintJob(id string) {
 		}
 	}
 
-	if err := s.printer.Print(receipt); err != nil {
+	dev, err := s.printerFor(job.Printer)
+	if err != nil {
+		_ = s.client.UpdatePrintJobStatus(id, "failed", err.Error())
+		fail("impressora: " + err.Error())
+
+		return
+	}
+	defer dev.Close()
+
+	if err := dev.Print(receipt); err != nil {
 		_ = s.client.UpdatePrintJobStatus(id, "failed", err.Error())
 		fail("impressão: " + err.Error())
 
 		return
+	}
+
+	if err := dev.Cut(); err != nil {
+		// Corte falhar não invalida o cupom já impresso - loga e segue,
+		// não faz o job inteiro falhar por causa disso.
+		log.Printf("job %s: falha ao cortar o papel: %v", id, err)
 	}
 
 	if err := s.client.UpdatePrintJobStatus(id, "printed", ""); err != nil {
