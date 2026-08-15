@@ -136,14 +136,17 @@ func (c *Client) readLoop() {
 			continue
 		}
 
+		payload := unwrapData(msg.Data)
+
 		switch msg.Event {
 		case "pusher:connection_established":
 			var data struct {
 				SocketID string `json:"socket_id"`
 			}
-			if err := json.Unmarshal(msg.Data, &data); err == nil {
-				c.socketID = data.SocketID
+			if err := json.Unmarshal([]byte(payload), &data); err != nil {
+				log.Printf("falha ao ler socket_id: %v", err)
 			}
+			c.socketID = data.SocketID
 			if c.OnConnected != nil {
 				c.OnConnected()
 			}
@@ -151,10 +154,10 @@ func (c *Client) readLoop() {
 			// Nada a fazer - subscription_succeeded só confirma que
 			// Subscribe() funcionou, não carrega dado de negócio.
 		case "pusher:error":
-			log.Printf("erro do Reverb: %s", string(msg.Data))
+			log.Printf("erro do Reverb: %s", payload)
 		default:
 			if c.OnEvent != nil {
-				c.OnEvent(msg.Event, string(msg.Data))
+				c.OnEvent(msg.Event, payload)
 			}
 		}
 	}
@@ -164,4 +167,19 @@ func mustJSON(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 
 	return b
+}
+
+// unwrapData desfaz o encode duplo do protocolo Pusher: o `data` de
+// qualquer mensagem vinda DO SERVIDOR (connection_established, eventos
+// de canal como print.job.created) é uma string JSON já serializada,
+// não um objeto puro - pusher-js/Echo fazem exatamente esse
+// `JSON.parse` duplo por baixo dos panos. Mensagens que O CLIENTE
+// envia (ex: pusher:subscribe) não passam por isso, só as recebidas.
+func unwrapData(raw json.RawMessage) string {
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return asString
+	}
+
+	return string(raw)
 }
