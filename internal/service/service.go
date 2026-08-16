@@ -38,6 +38,26 @@ type Status struct {
 	LastError string `json:"last_error,omitempty"`
 }
 
+// JobEvent é a visão da fila que a tela mostra ao vivo - não confundir
+// com queue.Entry (persistência/retry) nem com o PrintJob da API: é só
+// um resumo pra UI, mantido em memória, que desaparece a cada restart
+// do Agent (a fonte da verdade de tentativas/retry continua sendo
+// queue.Queue e o backend).
+type JobEvent struct {
+	ID        string    `json:"id"`
+	Type      string    `json:"type"` // order/reprint/test
+	Label     string    `json:"label"`
+	Status    string    `json:"status"` // queued/printing/printed/failed
+	Error     string    `json:"error,omitempty"`
+	Attempts  int       `json:"attempts,omitempty"`
+	WillRetry bool      `json:"will_retry,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// maxJobHistory limita a lista em memória - é só uma visão recente pra
+// UI, não um histórico de auditoria (isso já existe no backend).
+const maxJobHistory = 30
+
 type Service struct {
 	mu     sync.Mutex
 	cfg    *config.Config
@@ -46,8 +66,22 @@ type Service struct {
 	ws     *websocket.Client
 	queue  *queue.Queue
 	status Status
+	// stopCh é fechado por Unpair() pra sinalizar connect()/
+	// processQueueLoop()/heartbeatLoop() da geração atual de pareamento
+	// pra parar - sem isso, despareado o Agent ficaria com goroutines
+	// zumbis tentando reconectar/mandar heartbeat com client nil pra
+	// sempre (pânico) ou reautenticando com um token já removido.
+	stopCh chan struct{}
+	// jobHistory - uma entrada por PrintJob (upsert por ID, não um log
+	// que cresce a cada transição), tamanho limitado por maxJobHistory.
+	// A tela atualiza o status ao vivo (queued -> printing ->
+	// printed/failed) na mesma linha, como uma fila de impressão de
+	// verdade (pedido explícito: "apresentar o que está sendo imprimido
+	// e o que deu falha em tempo real, igual uma fila de impressão").
+	jobHistory []JobEvent
 
 	OnStatusChange func(Status)
+	OnJobEvent     func(JobEvent)
 }
 
 func New(cfg *config.Config, reverb ReverbConfig, dir string) (*Service, error) {
@@ -96,6 +130,49 @@ func (s *Service) setStatus(mutate func(*Status)) {
 	}
 }
 
+// RecentJobs devolve o snapshot atual da fila (mais recente primeiro) -
+// usado pela tela ao abrir/recarregar, pra não depender só dos eventos
+// que chegarem depois disso.
+func (s *Service) RecentJobs() []JobEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]JobEvent, len(s.jobHistory))
+	copy(out, s.jobHistory)
+
+	return out
+}
+
+// recordJob faz upsert por ID em jobHistory (mesmo job muda de status
+// na mesma linha, não vira uma entrada nova) e notifica a tela via
+// OnJobEvent. Jobs novos entram no topo; o histórico é limitado a
+// maxJobHistory (só uma visão recente, não auditoria).
+func (s *Service) recordJob(event JobEvent) {
+	event.UpdatedAt = time.Now()
+
+	s.mu.Lock()
+	found := false
+	for i := range s.jobHistory {
+		if s.jobHistory[i].ID == event.ID {
+			s.jobHistory[i] = event
+			found = true
+
+			break
+		}
+	}
+	if !found {
+		s.jobHistory = append([]JobEvent{event}, s.jobHistory...)
+		if len(s.jobHistory) > maxJobHistory {
+			s.jobHistory = s.jobHistory[:maxJobHistory]
+		}
+	}
+	s.mu.Unlock()
+
+	if s.OnJobEvent != nil {
+		s.OnJobEvent(event)
+	}
+}
+
 // Pair troca o código por um token, persiste e já inicia a conexão -
 // não exige reiniciar o Agent depois de parear.
 func (s *Service) Pair(serverURL, code string) error {
@@ -106,15 +183,49 @@ func (s *Service) Pair(serverURL, code string) error {
 		return err
 	}
 
+	stop := make(chan struct{})
+
 	s.mu.Lock()
 	s.cfg = cfg
 	s.client = api.New(cfg.ServerURL, cfg.Token)
+	s.stopCh = stop
 	s.mu.Unlock()
 
-	s.setStatus(func(st *Status) { st.Paired = true; st.LastError = "" })
+	s.setStatus(func(st *Status) { *st = Status{Paired: true} })
 
-	go s.connect()
-	go s.processQueueLoop()
+	go s.connect(stop)
+	go s.processQueueLoop(stop)
+
+	return nil
+}
+
+// Unpair limpa a configuração local (token, estação) e para as
+// goroutines de conexão/heartbeat/fila da geração atual - usado quando
+// o token guardado não serve mais (estação revogada/excluída no
+// painel) e a reconexão automática nunca ia se resolver sozinha. Depois
+// de chamado, a tela volta a aceitar um novo código de pareamento.
+func (s *Service) Unpair() error {
+	s.mu.Lock()
+	stop := s.stopCh
+	ws := s.ws
+	s.stopCh = nil
+	s.ws = nil
+	s.client = nil
+	s.cfg = &config.Config{}
+	s.mu.Unlock()
+
+	if stop != nil {
+		close(stop)
+	}
+	if ws != nil {
+		_ = ws.Close()
+	}
+
+	if err := s.cfg.Save(); err != nil {
+		return err
+	}
+
+	s.setStatus(func(st *Status) { *st = Status{} })
 
 	return nil
 }
@@ -125,22 +236,33 @@ func (s *Service) Pair(serverURL, code string) error {
 // falha que entra no mesmo backoff (ver processQueueLoop), sem
 // tratamento especial.
 func (s *Service) Start() {
-	if s.cfg.Paired() {
-		go s.connect()
-		go s.processQueueLoop()
+	if !s.cfg.Paired() {
+		return
 	}
+
+	stop := make(chan struct{})
+	s.mu.Lock()
+	s.stopCh = stop
+	s.mu.Unlock()
+
+	go s.connect(stop)
+	go s.processQueueLoop(stop)
 }
 
-func (s *Service) connect() {
+func (s *Service) connect(stop chan struct{}) {
 	authFunc := func(channel, socketID string) (string, error) {
 		return s.client.BroadcastAuth(channel, socketID)
 	}
 
-	s.ws = websocket.New(s.reverb.Scheme, s.reverb.Host, s.reverb.Port, s.reverb.AppKey, authFunc)
+	ws := websocket.New(s.reverb.Scheme, s.reverb.Host, s.reverb.Port, s.reverb.AppKey, authFunc)
 
-	s.ws.OnConnected = func() {
+	s.mu.Lock()
+	s.ws = ws
+	s.mu.Unlock()
+
+	ws.OnConnected = func() {
 		channel := "private-print-station." + s.cfg.PrintStationID
-		if err := s.ws.Subscribe(channel); err != nil {
+		if err := ws.Subscribe(channel); err != nil {
 			log.Printf("falha ao assinar canal: %v", err)
 			s.setStatus(func(st *Status) { st.LastError = err.Error() })
 
@@ -150,10 +272,18 @@ func (s *Service) connect() {
 		s.setStatus(func(st *Status) { st.Connected = true; st.LastError = "" })
 
 		go s.reconcilePending()
-		go s.heartbeatLoop()
+		go s.heartbeatLoop(stop)
 	}
 
-	s.ws.OnDisconnected = func(err error) {
+	ws.OnDisconnected = func(err error) {
+		select {
+		case <-stop:
+			// Desparelado enquanto conectado - não reconecta, não pisa
+			// no status (Unpair já zerou pra {}).
+			return
+		default:
+		}
+
 		s.setStatus(func(st *Status) {
 			st.Connected = false
 			if err != nil {
@@ -164,11 +294,15 @@ func (s *Service) connect() {
 		// Reconexão simples com espera fixa - backoff exponencial de
 		// verdade fica pra quando isso for testado contra quedas de
 		// rede reais, não antes.
-		time.Sleep(5 * time.Second)
-		s.connect()
+		select {
+		case <-stop:
+			return
+		case <-time.After(5 * time.Second):
+			s.connect(stop)
+		}
 	}
 
-	s.ws.OnEvent = func(event, data string) {
+	ws.OnEvent = func(event, data string) {
 		if event != "print.job.created" {
 			return
 		}
@@ -183,14 +317,19 @@ func (s *Service) connect() {
 		}
 
 		_ = s.queue.Add(payload.PrintJobID)
+		s.recordJob(JobEvent{ID: payload.PrintJobID, Label: "Novo pedido", Status: "queued"})
 	}
 
-	if err := s.ws.Connect(); err != nil {
+	if err := ws.Connect(); err != nil {
 		log.Printf("falha ao conectar no Reverb: %v", err)
 		s.setStatus(func(st *Status) { st.Connected = false; st.LastError = err.Error() })
 
-		time.Sleep(5 * time.Second)
-		go s.connect()
+		select {
+		case <-stop:
+			return
+		case <-time.After(5 * time.Second):
+			go s.connect(stop)
+		}
 	}
 }
 
@@ -208,6 +347,7 @@ func (s *Service) reconcilePending() {
 
 	for _, job := range jobs {
 		_ = s.queue.Add(job.ID)
+		s.recordJob(JobEvent{ID: job.ID, Type: job.Type, Label: jobLabel(&job), Status: "queued"})
 	}
 }
 
@@ -216,34 +356,61 @@ func (s *Service) reconcilePending() {
 // (offline vira só uma falha de tentativa como outra qualquer, sujeita
 // ao mesmo backoff, sem tratamento especial). Loop de vida do processo,
 // não retorna sozinho.
-func (s *Service) processQueueLoop() {
+func (s *Service) processQueueLoop(stop chan struct{}) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		for _, id := range s.queue.Due() {
-			s.attemptPrintJob(id)
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			for _, id := range s.queue.Due() {
+				s.attemptPrintJob(id)
+			}
 		}
 	}
 }
 
 func (s *Service) attemptPrintJob(id string) {
-	fail := func(reason string) {
-		if gaveUp := s.queue.RecordFailure(id); gaveUp {
+	label := "Pedido"
+	jobType := ""
+
+	fail := func(reason, errMsg string) {
+		attempts, gaveUp := s.queue.RecordFailure(id)
+		if gaveUp {
 			log.Printf("job %s desistido após esgotar tentativas (%s)", id, reason)
 		} else {
 			log.Printf("job %s falhou, tentando de novo com backoff (%s)", id, reason)
 		}
+		s.recordJob(JobEvent{
+			ID: id, Type: jobType, Label: label, Status: "failed",
+			Error: errMsg, Attempts: attempts, WillRetry: !gaveUp,
+		})
 	}
 
-	job, err := s.client.GetPrintJob(id)
+	s.mu.Lock()
+	client := s.client
+	s.mu.Unlock()
+	if client == nil {
+		// Despareado entre o job ficar `Due()` e esta tentativa rodar -
+		// não há client pra falar com a API, não conta como falha do job
+		// (ele continua na fila local, tenta de novo se/quando parear).
+		return
+	}
+
+	job, err := client.GetPrintJob(id)
 	if err != nil {
-		fail("busca do job: " + err.Error())
+		fail("busca do job: "+err.Error(), err.Error())
 
 		return
 	}
 
-	if err := s.client.UpdatePrintJobStatus(id, "printing", ""); err != nil {
+	jobType = job.Type
+	label = jobLabel(job)
+	s.recordJob(JobEvent{ID: id, Type: jobType, Label: label, Status: "printing"})
+
+	if err := client.UpdatePrintJobStatus(id, "printing", ""); err != nil {
 		log.Printf("falha ao marcar job %s como printing: %v", id, err)
 	}
 
@@ -263,16 +430,16 @@ func (s *Service) attemptPrintJob(id string) {
 
 	dev, err := s.printerFor(job.Printer)
 	if err != nil {
-		_ = s.client.UpdatePrintJobStatus(id, "failed", err.Error())
-		fail("impressora: " + err.Error())
+		_ = client.UpdatePrintJobStatus(id, "failed", err.Error())
+		fail("impressora: "+err.Error(), err.Error())
 
 		return
 	}
 	defer dev.Close()
 
 	if err := dev.Print(receipt); err != nil {
-		_ = s.client.UpdatePrintJobStatus(id, "failed", err.Error())
-		fail("impressão: " + err.Error())
+		_ = client.UpdatePrintJobStatus(id, "failed", err.Error())
+		fail("impressão: "+err.Error(), err.Error())
 
 		return
 	}
@@ -283,28 +450,62 @@ func (s *Service) attemptPrintJob(id string) {
 		log.Printf("job %s: falha ao cortar o papel: %v", id, err)
 	}
 
-	if err := s.client.UpdatePrintJobStatus(id, "printed", ""); err != nil {
-		fail("confirmação de status: " + err.Error())
+	if err := client.UpdatePrintJobStatus(id, "printed", ""); err != nil {
+		fail("confirmação de status: "+err.Error(), err.Error())
 
 		return
 	}
 
 	_ = s.queue.Remove(id)
+	s.recordJob(JobEvent{ID: id, Type: jobType, Label: label, Status: "printed"})
 }
 
-func (s *Service) heartbeatLoop() {
+// jobLabel deriva um texto curto pra mostrar na fila da tela - usa a
+// primeira linha do cupom (que já traz "Pedido #123" pros tipos
+// order/reprint, ou "TESTE DE IMPRESSÃO" pro tipo test - ver
+// `PrintJob::receiptPayload()` no backend) antes de cair pro título
+// genérico, já que o `title` do cupom é só o nome do Tenant (repetido
+// em todo job, pouco útil pra diferenciar linhas da fila).
+func jobLabel(job *api.PrintJob) string {
+	if job.Receipt != nil {
+		if lines, ok := job.Receipt["lines"].([]any); ok && len(lines) > 0 {
+			if first, ok := lines[0].(string); ok && first != "" {
+				return first
+			}
+		}
+		if title, ok := job.Receipt["title"].(string); ok && title != "" {
+			return title
+		}
+	}
+
+	return "Pedido " + job.ID
+}
+
+func (s *Service) heartbeatLoop(stop chan struct{}) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
 	send := func() {
+		s.mu.Lock()
+		client := s.client
+		s.mu.Unlock()
+		if client == nil {
+			return
+		}
+
 		hostname, _ := os.Hostname()
-		if err := s.client.Heartbeat(agentVersion, runtime.GOOS, hostname); err != nil {
+		if err := client.Heartbeat(agentVersion, runtime.GOOS, hostname); err != nil {
 			log.Printf("heartbeat falhou: %v", err)
 		}
 	}
 
 	send()
-	for range ticker.C {
-		send()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			send()
+		}
 	}
 }

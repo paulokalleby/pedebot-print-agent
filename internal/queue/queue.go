@@ -126,24 +126,26 @@ func (q *Queue) Due() []string {
 }
 
 // RecordFailure aplica backoff exponencial (3^tentativas segundos,
-// limitado a 5 minutos) e devolve true quando o job esgotou as
-// tentativas - quem chama é responsável por já ter marcado o job como
-// `failed` no backend antes de decidir descartar localmente.
-func (q *Queue) RecordFailure(printJobID string) (gaveUp bool) {
+// limitado a 5 minutos) e devolve o número de tentativas já feitas e
+// se o job esgotou as tentativas - quem chama é responsável por já ter
+// marcado o job como `failed` no backend antes de decidir descartar
+// localmente.
+func (q *Queue) RecordFailure(printJobID string) (attempts int, gaveUp bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	e, exists := q.entries[printJobID]
 	if !exists {
-		return true
+		return 0, true
 	}
 
 	e.Attempts++
 	if e.Attempts >= MaxAttempts {
+		attempts = e.Attempts
 		delete(q.entries, printJobID)
 		_ = q.save()
 
-		return true
+		return attempts, true
 	}
 
 	backoff := time.Duration(math.Pow(3, float64(e.Attempts))) * time.Second
@@ -153,7 +155,7 @@ func (q *Queue) RecordFailure(printJobID string) (gaveUp bool) {
 	e.NextAttemptAt = time.Now().Add(backoff)
 	_ = q.save()
 
-	return false
+	return e.Attempts, false
 }
 
 func (q *Queue) List() []string {

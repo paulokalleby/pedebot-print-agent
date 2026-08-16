@@ -12,9 +12,9 @@ import (
 // App é a ponte entre a janela (frontend) e o Service - fica fino de
 // propósito, toda a orquestração real mora em internal/service.
 type App struct {
-	ctx     context.Context
-	svc     *service.Service
-	reverb  service.ReverbConfig
+	ctx    context.Context
+	svc    *service.Service
+	reverb service.ReverbConfig
 }
 
 func NewApp() *App {
@@ -55,6 +55,9 @@ func (a *App) startup(ctx context.Context) {
 	a.svc.OnStatusChange = func(status service.Status) {
 		wailsRuntime.EventsEmit(a.ctx, "status", status)
 	}
+	a.svc.OnJobEvent = func(job service.JobEvent) {
+		wailsRuntime.EventsEmit(a.ctx, "print-job", job)
+	}
 	a.svc.Start()
 }
 
@@ -78,4 +81,30 @@ func (a *App) GetStatus() service.Status {
 	}
 
 	return a.svc.Status()
+}
+
+// GetRecentJobs devolve o snapshot atual da fila - a tela chama isso ao
+// abrir, pra não depender só dos eventos que chegarem dali pra frente.
+func (a *App) GetRecentJobs() []service.JobEvent {
+	if a.svc == nil {
+		return nil
+	}
+
+	return a.svc.RecentJobs()
+}
+
+// Unpair é chamado pelo frontend quando o usuário pede pra parear de
+// novo (token guardado localmente não serve mais - estação revogada/
+// excluída no painel, por exemplo) - devolve a tela ao estado "digite o
+// código de pareamento".
+func (a *App) Unpair() string {
+	if a.svc == nil {
+		return ""
+	}
+
+	if err := a.svc.Unpair(); err != nil {
+		return err.Error()
+	}
+
+	return ""
 }

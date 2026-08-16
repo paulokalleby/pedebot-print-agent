@@ -1,105 +1,330 @@
+/* Paleta e formas espelham pedebot-panel/src/assets/css/app.css
+   (.theme-green): --primary/--ring hsl(161 100% 35%), --radius 0.625rem.
+   Não é uma cópia do Tailwind/shadcn-vue (este projeto é Go + JS puro,
+   sem esse pipeline) - é a mesma linguagem visual escrita à mão. */
+:root {
+  --background: #ffffff;
+  --foreground: #1a1a1a;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --border: #e5e5e5;
+  --card: #ffffff;
+  --primary: hsl(161 100% 35%);
+  --primary-foreground: #ffffff;
+  --primary-ring: hsl(161 100% 35% / 50%);
+  --success: hsl(161 100% 35%);
+  --success-bg: hsl(161 100% 35% / 10%);
+  --warning: hsl(25 95% 45%);
+  --warning-bg: hsl(25 95% 53% / 12%);
+  --info: hsl(217 91% 55%);
+  --info-bg: hsl(217 91% 60% / 12%);
+  --destructive: hsl(4 74% 48%);
+  --destructive-bg: hsl(4 74% 48% / 10%);
+  --radius: 0.625rem;
+}
+
+/* Espelha o par .dark/.dark.theme-green do painel - segue o tema do SO
+   automaticamente (sem toggle na tela, pedido explícito do usuário: "pode
+   até ser automático para pegar do sistema"). Verde continua verde nos
+   dois temas, só o texto do botão primário troca pra escuro (mesma regra
+   do painel). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #1a1a1a;
+    --foreground: #fafafa;
+    --muted: #292929;
+    --muted-foreground: #b5b5b5;
+    --border: rgba(255, 255, 255, 0.1);
+    --card: #262626;
+    --primary-foreground: #1a1a1a;
+    --destructive: hsl(4 84% 65%);
+    --destructive-bg: hsl(4 84% 65% / 15%);
+  }
+}
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #1b2636;
-  color: #e8edf4;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 14px;
 }
 
 .wrap {
-  padding: 24px;
-  max-width: 480px;
+  padding: 20px;
+  max-width: 520px;
   margin: 0 auto;
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.brand-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius);
+}
+
 h1 {
-  font-size: 18px;
-  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
 }
 
 h2 {
-  font-size: 14px;
-  color: #9aa7ba;
-  margin: 24px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  margin: 20px 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 16px;
 }
 
 .status {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 16px;
   font-size: 14px;
 }
 
+.status #status-text {
+  flex: 1;
+  /* Sem isso, um flex item recusa encolher abaixo da largura do próprio
+     conteúdo (min-width:auto é o padrão) - a mensagem de erro de auth,
+     que é longa, forçava a linha toda a estourar e empurrava o botão
+     "Parear novamente" pra fora da área visível do card. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   display: inline-block;
+  flex-shrink: 0;
+}
+
+#retry-btn {
+  flex-shrink: 0;
 }
 
 .dot.online {
-  background: #22c55e;
+  background: var(--success);
 }
 
 .dot.offline {
-  background: #ef4444;
+  background: var(--destructive);
+}
+
+#pairing-box {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
 }
 
 #pairing-box label {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
   margin-bottom: 6px;
-  color: #9aa7ba;
+  color: var(--muted-foreground);
+}
+
+.pairing-row {
+  display: flex;
+  gap: 8px;
 }
 
 #pairing-box input {
-  width: 100%;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid #33415a;
-  background: #111a28;
-  color: #e8edf4;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
   font-size: 14px;
-  margin-bottom: 8px;
+  outline: none;
+  transition: box-shadow 0.15s, border-color 0.15s;
 }
 
-#pairing-box button {
-  width: 100%;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: none;
-  background: #3b82f6;
-  color: white;
-  font-size: 14px;
+#pairing-box input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+
+.btn {
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 12px;
   cursor: pointer;
+  outline: none;
+  transition: opacity 0.15s, box-shadow 0.15s;
 }
 
-#pairing-box button:disabled {
-  opacity: 0.6;
+.btn:focus-visible {
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+
+.btn:disabled {
+  opacity: 0.5;
   cursor: default;
 }
 
+.btn-primary {
+  flex-shrink: 0;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.btn-outline {
+  background: var(--background);
+  border-color: var(--border);
+  color: var(--foreground);
+}
+
+.btn-outline:hover:not(:disabled) {
+  background: var(--muted);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 .error {
-  color: #ef4444;
-  font-size: 13px;
+  color: var(--destructive);
+  font-size: 12px;
   margin-top: 6px;
+}
+
+.empty-state {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+}
+
+.queue-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.queue-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+
+.queue-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-item-label {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-item-detail {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-top: 4px;
+}
+
+.queue-item-error {
+  font-size: 12px;
+  color: var(--destructive);
+  margin-top: 4px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.badge-queued {
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+.badge-printing {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.badge-printed {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.badge-failed {
+  background: var(--destructive-bg);
+  color: var(--destructive);
+}
+
+.events-details {
+  margin-top: 20px;
+}
+
+.events-details summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 #log {
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin: 8px 0 0;
   font-size: 12px;
-  color: #9aa7ba;
-  max-height: 240px;
+  color: var(--muted-foreground);
+  max-height: 200px;
   overflow-y: auto;
 }
 
 #log li {
   padding: 4px 0;
-  border-bottom: 1px solid #263349;
+  border-bottom: 1px solid var(--border);
 }

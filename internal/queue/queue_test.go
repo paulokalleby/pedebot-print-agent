@@ -27,8 +27,8 @@ func TestAddIsIdempotent(t *testing.T) {
 	}
 
 	_ = q.Add("job-1")
-	_ = q.RecordFailure("job-1") // avança pro attempt=1, next_attempt_at no futuro
-	_ = q.Add("job-1")           // não deveria resetar o backoff
+	_, _ = q.RecordFailure("job-1") // avança pro attempt=1, next_attempt_at no futuro
+	_ = q.Add("job-1")              // não deveria resetar o backoff
 
 	if due := q.Due(); len(due) != 0 {
 		t.Fatalf("Add duplicado resetou o backoff - due=%v", due)
@@ -43,9 +43,12 @@ func TestRecordFailureAppliesBackoff(t *testing.T) {
 
 	_ = q.Add("job-1")
 
-	gaveUp := q.RecordFailure("job-1")
+	attempts, gaveUp := q.RecordFailure("job-1")
 	if gaveUp {
 		t.Fatal("não deveria desistir na primeira falha")
+	}
+	if attempts != 1 {
+		t.Fatalf("esperava attempts=1 na primeira falha, recebeu %d", attempts)
 	}
 
 	if due := q.Due(); len(due) != 0 {
@@ -63,7 +66,7 @@ func TestRecordFailureGivesUpAfterMaxAttempts(t *testing.T) {
 
 	var gaveUp bool
 	for i := 0; i < MaxAttempts; i++ {
-		gaveUp = q.RecordFailure("job-1")
+		_, gaveUp = q.RecordFailure("job-1")
 	}
 
 	if !gaveUp {
@@ -97,7 +100,7 @@ func TestQueuePersistsAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = q1.Add("job-1")
-	_ = q1.RecordFailure("job-1")
+	_, _ = q1.RecordFailure("job-1")
 
 	q2, err := New(dir)
 	if err != nil {
@@ -116,8 +119,7 @@ func TestRecordFailureOnUnknownJobGivesUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if gaveUp := q.RecordFailure("never-added"); !gaveUp {
+	if _, gaveUp := q.RecordFailure("never-added"); !gaveUp {
 		t.Fatal("job desconhecido deveria devolver gaveUp=true, nada a incrementar")
 	}
 }
-
