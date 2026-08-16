@@ -1,21 +1,5 @@
 export namespace service {
-
-	export class Status {
-	    paired: boolean;
-	    connected: boolean;
-	    last_error?: string;
-
-	    static createFrom(source: any = {}) {
-	        return new Status(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.paired = source["paired"];
-	        this.connected = source["connected"];
-	        this.last_error = source["last_error"];
-	    }
-	}
+	
 	export class JobEvent {
 	    id: string;
 	    type: string;
@@ -26,11 +10,11 @@ export namespace service {
 	    will_retry?: boolean;
 	    // Go type: time
 	    updated_at: any;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new JobEvent(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -40,7 +24,41 @@ export namespace service {
 	        this.error = source["error"];
 	        this.attempts = source["attempts"];
 	        this.will_retry = source["will_retry"];
-	        this.updated_at = source["updated_at"];
+	        this.updated_at = this.convertValues(source["updated_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Status {
+	    paired: boolean;
+	    connected: boolean;
+	    last_error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.paired = source["paired"];
+	        this.connected = source["connected"];
+	        this.last_error = source["last_error"];
 	    }
 	}
 
