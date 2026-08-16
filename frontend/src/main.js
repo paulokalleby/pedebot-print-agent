@@ -1,7 +1,7 @@
 import './app.css';
 import pedebotIcon from './assets/images/pedebot-icon.png';
 
-import { Pair, Unpair, GetStatus, GetRecentJobs } from '../wailsjs/go/main/App';
+import { Pair, Unpair, GetStatus, GetRecentJobs, GetDefaultServerURL } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 
 document.querySelector('#app').innerHTML = `
@@ -19,6 +19,9 @@ document.querySelector('#app').innerHTML = `
       </div>
 
       <div id="pairing-box">
+        <label for="server-url">Servidor</label>
+        <input id="server-url" type="text" placeholder="https://api.pedebot.com.br" autocomplete="off" />
+
         <label for="code">Código de pareamento</label>
         <div class="pairing-row">
           <input id="code" type="text" placeholder="PDB-XXXX-XXXX" autocomplete="off" />
@@ -43,6 +46,7 @@ const dot = document.getElementById('dot');
 const statusText = document.getElementById('status-text');
 const retryBtn = document.getElementById('retry-btn');
 const pairingBox = document.getElementById('pairing-box');
+const serverUrlInput = document.getElementById('server-url');
 const codeInput = document.getElementById('code');
 const pairBtn = document.getElementById('pair-btn');
 const pairError = document.getElementById('pair-error');
@@ -57,27 +61,31 @@ function appendLog(message) {
   log.prepend(li);
 }
 
-// "Parear novamente" fica visível sempre que o Agent não está
-// conectado - inclusive já pareado, mas com o token inválido (estação
-// revogada/excluída no painel) - a reconexão automática do Service
-// nunca ia se resolver sozinha nesse caso, então o usuário precisa de
-// uma saída manual pra voltar à tela de digitar um novo código.
+// O botão de desconectar/parear de novo fica visível sempre que o
+// Agent está pareado, esteja conectado ou não - inclusive conectado de
+// verdade, pra dar pra trocar de servidor (ex: testando contra produção
+// em vez de local) sem precisar achar o arquivo de config à mão. Antes
+// só aparecia quando já estava desconectado, o que também deixava sem
+// saída um token revogado (estação excluída/revogada no painel).
 function renderStatus(status) {
   if (!status.paired) {
     dot.className = 'dot offline';
     statusText.textContent = 'Não pareado';
+    statusText.title = '';
     retryBtn.style.display = 'none';
     pairingBox.style.display = '';
 
     return;
   }
 
+  pairingBox.style.display = 'none';
+  retryBtn.style.display = '';
+
   if (status.connected) {
     dot.className = 'dot online';
     statusText.textContent = 'Conectado';
     statusText.title = '';
-    retryBtn.style.display = 'none';
-    pairingBox.style.display = 'none';
+    retryBtn.textContent = 'Desconectar';
   } else {
     dot.className = 'dot offline';
     const text = status.last_error
@@ -88,8 +96,7 @@ function renderStatus(status) {
     // ser bem longo, ex: falha de autenticação do canal Reverb) continua
     // acessível via tooltip nativo do navegador ao passar o mouse.
     statusText.title = text;
-    retryBtn.style.display = '';
-    pairingBox.style.display = 'none';
+    retryBtn.textContent = 'Parear novamente';
   }
 }
 
@@ -150,17 +157,17 @@ function upsertJob(job) {
   renderQueue();
 }
 
-async function doPair(code) {
+async function doPair(serverUrl, code) {
   pairError.textContent = '';
   pairBtn.disabled = true;
 
   try {
-    const error = await Pair(code);
+    const error = await Pair(serverUrl, code);
     if (error) {
       pairError.textContent = error;
       appendLog(`Falha no pareamento: ${error}`);
     } else {
-      appendLog('Pareado com sucesso.');
+      appendLog(`Pareado com sucesso em ${serverUrl}.`);
     }
   } catch (err) {
     pairError.textContent = String(err);
@@ -170,8 +177,9 @@ async function doPair(code) {
 }
 
 pairBtn.addEventListener('click', () => {
+  const serverUrl = serverUrlInput.value.trim();
   const code = codeInput.value.trim();
-  if (code) doPair(code);
+  if (serverUrl && code) doPair(serverUrl, code);
 });
 
 retryBtn.addEventListener('click', async () => {
@@ -205,4 +213,7 @@ EventsOn('print-job', (job) => {
 GetStatus().then(renderStatus);
 GetRecentJobs().then((recent) => {
   (recent || []).forEach(upsertJob);
+});
+GetDefaultServerURL().then((url) => {
+  serverUrlInput.value = url;
 });

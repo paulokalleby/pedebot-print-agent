@@ -6,6 +6,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"runtime"
@@ -84,7 +85,7 @@ type Service struct {
 	OnJobEvent     func(JobEvent)
 }
 
-func New(cfg *config.Config, reverb ReverbConfig, dir string) (*Service, error) {
+func New(cfg *config.Config, dir string) (*Service, error) {
 	q, err := queue.New(dir)
 	if err != nil {
 		return nil, err
@@ -92,7 +93,6 @@ func New(cfg *config.Config, reverb ReverbConfig, dir string) (*Service, error) 
 
 	s := &Service{
 		cfg:    cfg,
-		reverb: reverb,
 		queue:  q,
 		status: Status{Paired: cfg.Paired()},
 	}
@@ -174,8 +174,18 @@ func (s *Service) recordJob(event JobEvent) {
 }
 
 // Pair troca o código por um token, persiste e já inicia a conexão -
-// não exige reiniciar o Agent depois de parear.
+// não exige reiniciar o Agent depois de parear. serverURL é só a URL
+// da API (ex: https://api.pedebot.com.br) - os dados de conexão do
+// Reverb são buscados no próprio servidor (ver fetchReverbConfig), o
+// Agent nunca tem host/porta/chave do Reverb cravados no binário.
 func (s *Service) Pair(serverURL, code string) error {
+	reverb, err := fetchReverbConfig(serverURL)
+	if err != nil {
+		s.setStatus(func(st *Status) { st.LastError = err.Error() })
+
+		return fmt.Errorf("falha ao buscar configuração do servidor: %w", err)
+	}
+
 	cfg, err := pairing.Pair(serverURL, code)
 	if err != nil {
 		s.setStatus(func(st *Status) { st.LastError = err.Error() })
@@ -187,6 +197,7 @@ func (s *Service) Pair(serverURL, code string) error {
 
 	s.mu.Lock()
 	s.cfg = cfg
+	s.reverb = reverb
 	s.client = api.New(cfg.ServerURL, cfg.Token)
 	s.stopCh = stop
 	s.mu.Unlock()
@@ -245,8 +256,59 @@ func (s *Service) Start() {
 	s.stopCh = stop
 	s.mu.Unlock()
 
-	go s.connect(stop)
+	go s.startConnectionLoop(stop)
 	go s.processQueueLoop(stop)
+}
+
+// fetchReverbConfig busca host/porta/scheme/chave do Reverb em
+// `GET /print-agent/config` no servidor apontado por serverURL - nunca
+// cravado no Agent (ver SPEC-025), assim reconectar sempre usa a
+// configuração atual do servidor, não uma cópia salva que pode ficar
+// desatualizada.
+func fetchReverbConfig(serverURL string) (ReverbConfig, error) {
+	reverb, err := api.New(serverURL, "").FetchReverbConfig()
+	if err != nil {
+		return ReverbConfig{}, err
+	}
+
+	return ReverbConfig{
+		Scheme: reverb.Scheme,
+		Host:   reverb.Host,
+		Port:   reverb.Port,
+		AppKey: reverb.Key,
+	}, nil
+}
+
+// startConnectionLoop busca a configuração do Reverb (com retry - a
+// rede pode estar indisponível bem no boot do Agent) e só então conecta
+// - chamado por Start() ao reiniciar já pareado (Pair() já tem a
+// configuração em mãos na hora, não passa por aqui).
+func (s *Service) startConnectionLoop(stop chan struct{}) {
+	for {
+		s.mu.Lock()
+		serverURL := s.cfg.ServerURL
+		s.mu.Unlock()
+
+		reverb, err := fetchReverbConfig(serverURL)
+		if err != nil {
+			s.setStatus(func(st *Status) { st.Connected = false; st.LastError = err.Error() })
+
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Second):
+				continue
+			}
+		}
+
+		s.mu.Lock()
+		s.reverb = reverb
+		s.mu.Unlock()
+
+		s.connect(stop)
+
+		return
+	}
 }
 
 func (s *Service) connect(stop chan struct{}) {

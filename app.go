@@ -9,25 +9,21 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// DefaultServerURL é só o valor pré-preenchido na tela de pareamento -
+// o operador raramente precisa trocar (só em desenvolvimento, apontando
+// pro backend local). Os dados de conexão do Reverb nunca ficam aqui,
+// são buscados no próprio servidor (ver internal/service.Pair).
+const DefaultServerURL = "https://api.pedebot.com.br"
+
 // App é a ponte entre a janela (frontend) e o Service - fica fino de
 // propósito, toda a orquestração real mora em internal/service.
 type App struct {
-	ctx    context.Context
-	svc    *service.Service
-	reverb service.ReverbConfig
+	ctx context.Context
+	svc *service.Service
 }
 
 func NewApp() *App {
-	return &App{
-		// Dev local, mesmos valores de pedebot-api/.env - vira
-		// configurável antes de qualquer distribuição real.
-		reverb: service.ReverbConfig{
-			Scheme: "http",
-			Host:   "localhost",
-			Port:   8080,
-			AppKey: "mluuypmnconyrt2e9g1j",
-		},
-	}
+	return &App{}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -44,7 +40,7 @@ func (a *App) startup(ctx context.Context) {
 		wailsRuntime.LogError(ctx, "falha ao resolver diretório de config: "+err.Error())
 	}
 
-	svc, err := service.New(cfg, a.reverb, dir)
+	svc, err := service.New(cfg, dir)
 	if err != nil {
 		wailsRuntime.LogError(ctx, "falha ao iniciar o serviço: "+err.Error())
 
@@ -61,13 +57,18 @@ func (a *App) startup(ctx context.Context) {
 	a.svc.Start()
 }
 
-// Pair é chamado pelo frontend com o código digitado pelo usuário
-// (formato PDB-XXXX-XXXX). serverURL é fixo por enquanto (aponta pro
-// backend local) - vira um campo editável antes de qualquer
-// distribuição fora da máquina de desenvolvimento.
-func (a *App) Pair(code string) string {
-	serverURL := "http://localhost:8000"
+// GetDefaultServerURL preenche o campo "Servidor" da tela de
+// pareamento - o operador normalmente só confirma, só troca em
+// desenvolvimento/teste.
+func (a *App) GetDefaultServerURL() string {
+	return DefaultServerURL
+}
 
+// Pair é chamado pelo frontend com a URL da API e o código digitado
+// pelo usuário (formato PDB-XXXX-XXXX) - a configuração do Reverb
+// (host/porta/chave) é buscada nesse mesmo servidor, nunca escolhida
+// separadamente (ver internal/service.Pair).
+func (a *App) Pair(serverURL, code string) string {
 	if err := a.svc.Pair(serverURL, code); err != nil {
 		return err.Error()
 	}

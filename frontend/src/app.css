@@ -153,16 +153,26 @@ h2 {
 }
 
 #pairing-box input {
-  flex: 1;
+  height: 34px;
   min-width: 0;
-  padding: 7px 10px;
+  padding: 0 10px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--background);
   color: var(--foreground);
   font-size: 14px;
+  margin-bottom: 12px;
   outline: none;
   transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+#server-url {
+  width: 100%;
+}
+
+.pairing-row input {
+  flex: 1;
+  margin-bottom: 0;
 }
 
 #pairing-box input:focus {
@@ -171,11 +181,22 @@ h2 {
 }
 
 .btn {
+  /* Sem isso, o WebKit (motor do Wails no macOS) desenha um botão de
+     sistema por cima do CSS declarado aqui. Mesmo com isso, altura por
+     padding não bate exatamente com a do input (line-height de botão
+     não é igual ao de input mesmo com mesma fonte) - por isso a altura
+     abaixo é fixa em vez de calculada por padding, pra garantir que os
+     dois fiquem do mesmo tamanho de verdade. */
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+  line-height: normal;
+  height: 34px;
   border-radius: var(--radius);
   border: 1px solid transparent;
   font-size: 13px;
   font-weight: 500;
-  padding: 7px 12px;
+  padding: 0 12px;
   cursor: pointer;
   outline: none;
   transition: opacity 0.15s, box-shadow 0.15s;
@@ -211,7 +232,8 @@ h2 {
 }
 
 .btn-sm {
-  padding: 4px 10px;
+  height: 26px;
+  padding: 0 10px;
   font-size: 12px;
 }
 

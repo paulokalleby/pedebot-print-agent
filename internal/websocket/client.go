@@ -11,6 +11,7 @@ package websocket
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -59,8 +60,15 @@ type wireMessage struct {
 }
 
 func (c *Client) Connect() error {
-	conn, _, err := websocket.DefaultDialer.Dial(c.wsURL, http.Header{})
+	conn, resp, err := websocket.DefaultDialer.Dial(c.wsURL, http.Header{})
 	if err != nil {
+		if resp != nil {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+			resp.Body.Close()
+
+			return fmt.Errorf("%w (status %s, body: %s)", err, resp.Status, string(body))
+		}
+
 		return err
 	}
 	c.conn = conn

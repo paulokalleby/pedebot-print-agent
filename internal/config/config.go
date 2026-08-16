@@ -16,9 +16,14 @@ const dirName = "PedeBot Print Agent"
 // Sanctum token da PrintStation, obtido uma única vez via
 // pairing.Exchange - nunca digitado/colado manualmente pelo usuário.
 type Config struct {
-	ServerURL     string `json:"server_url"`
+	// ServerURL é só a URL da API (ex: https://api.pedebot.com.br) -
+	// os dados de conexão do Reverb (host/porta/chave) nunca ficam
+	// salvos aqui, são buscados em `GET /print-agent/config` sempre que
+	// o Agent conecta (Pair ou Start) - assim o Agent nunca fica com
+	// configuração de ambiente desatualizada/cravada no binário.
+	ServerURL      string `json:"server_url"`
 	PrintStationID string `json:"print_station_id"`
-	Token         string `json:"token"`
+	Token          string `json:"token"`
 }
 
 func (c *Config) Paired() bool {

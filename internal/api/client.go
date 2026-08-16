@@ -128,6 +128,37 @@ func (c *Client) UpdatePrintJobStatus(id, status, errorMessage string) error {
 	return nil
 }
 
+// ReverbConfig é a resposta de `GET /print-agent/config` - dados de
+// conexão do Reverb do servidor apontado por `baseURL`. Buscado em vez
+// de cravado no Agent (ver SPEC-025) - assim trocar de ambiente (local/
+// produção) é só trocar a URL da API, o resto vem junto sozinho.
+type ReverbConfig struct {
+	Scheme string `json:"scheme"`
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
+	Key    string `json:"key"`
+}
+
+func (c *Client) FetchReverbConfig() (*ReverbConfig, error) {
+	var result struct {
+		Reverb ReverbConfig `json:"reverb"`
+	}
+
+	body, status, err := c.do("GET", "/print-agent/config", nil, false)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("status %d ao buscar configuração do Reverb: %s", status, string(body))
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+
+	return &result.Reverb, nil
+}
+
 func (c *Client) Heartbeat(agentVersion, os, hostname string) error {
 	payload := map[string]string{
 		"agent_version": agentVersion,
