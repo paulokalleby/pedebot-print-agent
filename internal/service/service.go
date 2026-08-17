@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pedebot-print-agent/internal/api"
+	"pedebot-print-agent/internal/autostart"
 	"pedebot-print-agent/internal/config"
 	"pedebot-print-agent/internal/pairing"
 	"pedebot-print-agent/internal/printer"
@@ -204,6 +205,15 @@ func (s *Service) Pair(serverURL, code string) error {
 	s.mu.Unlock()
 
 	s.setStatus(func(st *Status) { *st = Status{Paired: true} })
+
+	// Pareamento é o sinal de "isto é uma instalação de produção de
+	// verdade" - habilita autostart aqui, não em algum outro momento
+	// (ver internal/autostart, "operador nunca deveria precisar de
+	// lançamento manual"). Best-effort - falhar em habilitar autostart
+	// nunca deve fazer o pareamento em si falhar.
+	if err := autostart.Enable(); err != nil {
+		log.Printf("falha ao habilitar autostart (não bloqueia o pareamento): %v", err)
+	}
 
 	go s.connect(stop)
 	go s.processQueueLoop(stop)
