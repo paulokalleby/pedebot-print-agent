@@ -6,6 +6,7 @@ import (
 	"pedebot-print-agent/internal/config"
 	"pedebot-print-agent/internal/service"
 
+	"github.com/wailsapp/wails/v2/pkg/options"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -24,6 +25,23 @@ type App struct {
 
 func NewApp() *App {
 	return &App{}
+}
+
+// onSecondInstanceLaunch é chamado (ver main.go, SingleInstanceLock)
+// quando o usuário abre o Agent de novo (atalho, ícone) enquanto já
+// tem um processo rodando - em vez de uma segunda instância, só traz a
+// janela existente de volta. É o que substitui a bandeja do sistema
+// pra acessibilidade (ver SPEC-025/memória - 3 tentativas de bandeja
+// já travaram): fechar a janela (HideWindowOnClose, ver main.go) nunca
+// mata o processo/serviço de impressão, só esconde a janela; reabrir
+// o app é como o usuário volta a ver ela.
+func (a *App) onSecondInstanceLaunch(_ options.SecondInstanceData) {
+	if a.ctx == nil {
+		return
+	}
+
+	wailsRuntime.WindowShow(a.ctx)
+	wailsRuntime.WindowUnminimise(a.ctx)
 }
 
 func (a *App) startup(ctx context.Context) {

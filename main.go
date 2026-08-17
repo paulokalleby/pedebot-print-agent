@@ -25,6 +25,16 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
 		OnStartup:        app.startup,
+		// Fechar a janela (botão X) nunca deve matar o processo - é
+		// aqui que o WebSocket e a fila de impressão vivem. Ver
+		// App.onSecondInstanceLaunch pra como o usuário volta a ver a
+		// janela depois (substitui a necessidade de bandeja do sistema,
+		// ver SPEC-025/memória - 3 tentativas de bandeja já travaram).
+		HideWindowOnClose: true,
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId:               "br.com.pedebot.printagent",
+			OnSecondInstanceLaunch: app.onSecondInstanceLaunch,
+		},
 		Bind: []interface{}{
 			app,
 		},
