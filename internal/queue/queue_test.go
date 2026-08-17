@@ -1,6 +1,8 @@
 package queue
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -121,5 +123,48 @@ func TestRecordFailureOnUnknownJobGivesUp(t *testing.T) {
 
 	if _, gaveUp := q.RecordFailure("never-added"); !gaveUp {
 		t.Fatal("job desconhecido deveria devolver gaveUp=true, nada a incrementar")
+	}
+}
+
+func TestSaveNeverLeavesATempFileBehind(t *testing.T) {
+	dir := t.TempDir()
+
+	q, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = q.Add("job-1")
+
+	if _, err := os.Stat(filepath.Join(dir, "queue.json.tmp")); !os.IsNotExist(err) {
+		t.Fatalf("esperava que o arquivo temporário não sobrevivesse ao save(), stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "queue.json")); err != nil {
+		t.Fatalf("esperava queue.json persistido, stat err=%v", err)
+	}
+}
+
+func TestNewToleratesACorruptedQueueFileInsteadOfFailingToBoot(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, "queue.json"), []byte("{isso não é json válido"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	q, err := New(dir)
+	if err != nil {
+		t.Fatalf("um queue.json corrompido não deveria impedir o Agent de iniciar, recebeu erro: %v", err)
+	}
+
+	if list := q.List(); len(list) != 0 {
+		t.Fatalf("esperava fila vazia após recuperar de um arquivo corrompido, recebeu %v", list)
+	}
+
+	// Confirma que a fila volta a funcionar normalmente depois - não é
+	// só "não travar", precisa aceitar novos jobs e persistir de novo.
+	if err := q.Add("job-1"); err != nil {
+		t.Fatalf("fila recuperada deveria aceitar novos jobs, erro: %v", err)
+	}
+	if due := q.Due(); len(due) != 1 || due[0] != "job-1" {
+		t.Fatalf("esperava [job-1] due após recuperar da corrupção, recebeu %v", due)
 	}
 }

@@ -69,6 +69,10 @@ func (a *App) GetDefaultServerURL() string {
 // (host/porta/chave) é buscada nesse mesmo servidor, nunca escolhida
 // separadamente (ver internal/service.Pair).
 func (a *App) Pair(serverURL, code string) string {
+	if a.svc == nil {
+		return "o serviço do Agent não iniciou corretamente - reinicie o aplicativo"
+	}
+
 	if err := a.svc.Pair(serverURL, code); err != nil {
 		return err.Error()
 	}

@@ -1,15 +1,24 @@
 // Package queue é a fila local persistente do Print Agent (ver SPEC-025,
 // seção 8 - "não utilizar apenas memória RAM", "implementar retry com
-// backoff", "evitar loops infinitos agressivos"). Implementação
-// provisória em arquivo JSON simples: o formato final (SQLite embutido
-// foi cogitado, ver a Spec) ainda não foi validado - o que importa agora
-// é que a lista de jobs pendentes e sua contagem de tentativas
-// sobrevivem a um restart do processo, não a tecnologia de
-// armazenamento exata por trás disso.
+// backoff", "evitar loops infinitos agressivos"). Decisão final
+// (2026-08-17): JSON simples, não SQLite. Uma estação de impressão
+// nunca acumula mais que algumas dezenas de jobs pendentes por vez
+// (`MaxAttempts=5` descarta o resto) - não há consulta nem
+// concorrência de escrita entre processos que justifique um banco
+// embutido (e SQLite puro-Go/CGO traria dependência e complexidade sem
+// benefício real nesse volume). O que de fato importava resolver era
+// durabilidade: `save()` escreve num arquivo temporário e troca via
+// `os.Rename` (atômico no mesmo volume, evita um `queue.json` truncado
+// se o processo for encerrado no meio de uma escrita - realista num PC
+// de operador, que sofre queda de energia/desligamento forçado sem
+// aviso) e `load()` trata um arquivo corrompido como fila vazia em vez
+// de falhar o boot inteiro do Agent (ver o bug real que isso evitava em
+// app.go `Pair()`).
 package queue
 
 import (
 	"encoding/json"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -58,7 +67,16 @@ func (q *Queue) load() error {
 
 	var list []*Entry
 	if err := json.Unmarshal(data, &list); err != nil {
-		return err
+		// Arquivo corrompido (ex: gravação interrompida por queda de
+		// energia/kill do processo) não pode derrubar o boot do Agent
+		// inteiro - ver o comentário do pacote. Perder a fila de retry
+		// local é aceitável (o backend continua sendo a fonte da
+		// verdade dos PrintJob, ver PrintJobService::pendingFor);
+		// falhar em abrir o app inteiro por isso não é.
+		log.Printf("queue: %s corrompido, iniciando fila vazia: %v", q.path, err)
+		q.entries = map[string]*Entry{}
+
+		return nil
 	}
 
 	q.entries = map[string]*Entry{}
@@ -69,6 +87,10 @@ func (q *Queue) load() error {
 	return nil
 }
 
+// save escreve num arquivo temporário no mesmo diretório e troca via
+// os.Rename - atômico no mesmo volume (POSIX e Windows), evita um
+// queue.json parcialmente escrito se o processo for encerrado no meio
+// do os.WriteFile direto no arquivo final (ver comentário do pacote).
 func (q *Queue) save() error {
 	list := make([]*Entry, 0, len(q.entries))
 	for _, e := range q.entries {
@@ -80,7 +102,12 @@ func (q *Queue) save() error {
 		return err
 	}
 
-	return os.WriteFile(q.path, data, 0o600)
+	tmp := q.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+
+	return os.Rename(tmp, q.path)
 }
 
 // Add é idempotente - um job já presente na fila não reseta a contagem
