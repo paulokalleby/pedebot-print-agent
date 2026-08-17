@@ -6,11 +6,20 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 )
+
+// ErrJobConflict indica que o backend rejeitou a transição de status
+// (409) - o job já está "printing"/"printed" no servidor, normalmente
+// porque outro processo do Agent (ou uma reconciliação concorrente) já
+// reivindicou este mesmo print_job_id. Quem chama NUNCA deve insistir
+// em imprimir depois disto - é exatamente o caso que causaria impressão
+// física duplicada.
+var ErrJobConflict = errors.New("job já reivindicado por outro processo")
 
 type Client struct {
 	baseURL string
@@ -120,6 +129,9 @@ func (c *Client) UpdatePrintJobStatus(id, status, errorMessage string) error {
 	body, respStatus, err := c.do("PATCH", "/print-agent/print-jobs/"+id+"/status", payload, true)
 	if err != nil {
 		return err
+	}
+	if respStatus == http.StatusConflict {
+		return ErrJobConflict
 	}
 	if respStatus != http.StatusOK {
 		return fmt.Errorf("status %d ao atualizar job %s: %s", respStatus, id, string(body))

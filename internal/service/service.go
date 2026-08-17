@@ -6,6 +6,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -473,6 +474,20 @@ func (s *Service) attemptPrintJob(id string) {
 	s.recordJob(JobEvent{ID: id, Type: jobType, Label: label, Status: "printing"})
 
 	if err := client.UpdatePrintJobStatus(id, "printing", ""); err != nil {
+		if errors.Is(err, api.ErrJobConflict) {
+			// O backend recusou (409): outro processo já reivindicou este
+			// job. Aborta SEM imprimir - insistir aqui é exatamente o
+			// cenário de impressão física duplicada que essa checagem
+			// existe pra evitar. Remove da fila local, não é um retry.
+			log.Printf("job %s já foi reivindicado por outro processo - abortando sem imprimir", id)
+			_ = s.queue.Remove(id)
+			s.recordJob(JobEvent{
+				ID: id, Type: jobType, Label: label, Status: "failed",
+				Error: "job já processado por outro processo (pareamento duplicado?)",
+			})
+
+			return
+		}
 		log.Printf("falha ao marcar job %s como printing: %v", id, err)
 	}
 
