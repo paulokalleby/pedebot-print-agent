@@ -9,5 +9,12 @@
   "author": {
     "name": "paulokalleby",
     "email": "paulo.devweb@gmail.com"
+  },
+  "info": {
+    "companyName": "Kall Labs",
+    "productName": "PedeBot Print Agent",
+    "productVersion": "0.1.0",
+    "copyright": "© 2026 Kall Labs",
+    "comments": "Agente local de impressão automática de pedidos do PedeBot"
   }
 }
