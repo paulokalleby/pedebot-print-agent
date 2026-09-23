@@ -1,5 +1,5 @@
 /* Paleta e formas espelham pedebot-panel/src/assets/css/app.css
-   (.theme-green): --primary/--ring hsl(161 100% 35%), --radius 0.625rem.
+   (.theme-green): --primary/--ring hsl(140 63% 44%), --radius 0.625rem.
    Não é uma cópia do Tailwind/shadcn-vue (este projeto é Go + JS puro,
    sem esse pipeline) - é a mesma linguagem visual escrita à mão. */
 :root {
@@ -9,11 +9,11 @@
   --muted-foreground: #71717a;
   --border: #e5e5e5;
   --card: #ffffff;
-  --primary: hsl(161 100% 35%);
+  --primary: hsl(140 63% 44%);
   --primary-foreground: #ffffff;
-  --primary-ring: hsl(161 100% 35% / 50%);
-  --success: hsl(161 100% 35%);
-  --success-bg: hsl(161 100% 35% / 10%);
+  --primary-ring: hsl(140 63% 44% / 50%);
+  --success: hsl(140 63% 44%);
+  --success-bg: hsl(140 63% 44% / 10%);
   --warning: hsl(25 95% 45%);
   --warning-bg: hsl(25 95% 53% / 12%);
   --info: hsl(217 91% 55%);
