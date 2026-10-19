@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Wails and NSIS
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
+          sudo apt-get update && sudo apt-get install -y nsis
+      - name: Build installer
+        run: wails build -platform windows/amd64 -nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/bin/pedebot-print-agent-amd64-installer.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
+      - name: Build universal app
+        run: wails build -platform darwin/universal
+      - name: Zip app
+        run: ditto -c -k --keepParent build/bin/pedebot-print-agent.app build/bin/pedebot-print-agent-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: build/bin/pedebot-print-agent-macos.zip
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
